@@ -5,3 +5,4 @@ const dynamicRouteManager = new DynamicRouteManager(new HttpRouteDataSource());
 
 export { dynamicRouteManager };
 export * from './types';
+export type { IRouteDataSource } from './RouterData';

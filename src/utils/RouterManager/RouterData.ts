@@ -56,9 +56,13 @@ const mockData: ServerRouteResponse = {
     ]
 };
 
+const LOCAL_ROUTE_KEY = 'router_manager_local_routes';
+
 export class MockRouteDataSource implements IRouteDataSource {
     private cache: ServerRouteResponse | null = null;
     async fetch(): Promise<ServerRouteResponse> {
+        const local = readLocalRouteData();
+        if (local) return local;
         await new Promise(r => setTimeout(r, 120));
         return JSON.parse(JSON.stringify(mockData));
     }
@@ -71,4 +75,18 @@ export class MockRouteDataSource implements IRouteDataSource {
     isSameVersion(localVersion: string | null, remoteVersion: string): boolean {
         return !!localVersion && localVersion === remoteVersion;
     }
+}
+
+export function readLocalRouteData(): ServerRouteResponse | null {
+    try {
+        const raw = localStorage.getItem(LOCAL_ROUTE_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw) as ServerRouteResponse;
+    } catch {
+        return null;
+    }
+}
+
+export function writeLocalRouteData(resp: ServerRouteResponse) {
+    localStorage.setItem(LOCAL_ROUTE_KEY, JSON.stringify(resp));
 }

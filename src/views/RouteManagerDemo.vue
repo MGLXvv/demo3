@@ -1,93 +1,29 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch, defineComponent, h } from 'vue';
-import type { PropType } from 'vue';
+import type { PropType, VNode } from 'vue';
 import { RouterLink } from 'vue-router';
 import { DynamicRouteManager } from '../utils/RouterManager/RouterManager';
 import type { IRouteDataSource } from '../utils/RouterManager/RouterData';
-import type { BuiltRoute, ServerRouteNode, ServerRouteResponse } from '../utils/RouterManager';
+import { MockRouteDataSource, readLocalRouteData, writeLocalRouteData } from '../utils/RouterManager/RouterData';
+import type { BuiltRoute, ServerRouteNode, ServerRouteResponse } from '../utils/RouterManager/types';
 import { viewMap } from '../utils/RouterManager/ViewMap';
 import { router } from '../router';
 
-type DatasetKey = 'basic' | 'expanded';
 type EditableNode = ServerRouteNode & { children?: EditableNode[] };
 
-const LOCAL_STORAGE_KEY = 'router_manager_demo_local';
+const dataSource: IRouteDataSource = new MockRouteDataSource();
 
-const baseDatasets: Record<DatasetKey, { version: string; routes: EditableNode[]; componentMapping: Record<string, string> }> = {
-    basic: {
-        version: '1.0.0',
-        componentMapping: {
-            '101': 'home',
-            '102': 'about',
-            '103': 'alpha',
-            '104': 'beta',
-            '105': 'my'
-        },
-        routes: [
-            { path: '/home', name: 'Home', componentId: '101', meta: { title: '首页' } },
-            { path: '/about', name: 'About', componentId: '102', meta: { title: '关于' } },
-            { path: '/alpha', name: 'AlphaPage', componentId: '103', meta: { title: '页面 A' } },
-            { path: '/legacy-home', name: 'LegacyHome', redirect: '/home', meta: { title: '重定向到首页' } },
-            {
-                path: '/workspace',
-                name: 'Workspace',
-                componentId: '101',
-                redirect: '/workspace/profile',
-                meta: { title: '工作台' },
-                children: [
-                    { path: 'profile', name: 'Profile', componentId: '105', meta: { title: '个人中心' } },
-                    { path: 'reports', name: 'Reports', componentId: '104', meta: { title: '报表(Beta)' } },
-                    { path: 'entry', name: 'WorkspaceEntry', redirect: '/workspace/reports', meta: { title: '子路由重定向' } }
-                ]
-            }
-        ]
-    },
-    expanded: {
-        version: '2.0.0',
-        componentMapping: {
-            '201': 'home',
-            '202': 'about',
-            '203': 'alpha',
-            '204': 'beta',
-            '205': 'gamma',
-            '206': 'delta',
-            '207': 'my'
-        },
-        routes: [
-            { path: '/home', name: 'Home', componentId: '201', meta: { title: '首页', icon: 'home' } },
-            { path: '/about', name: 'About', componentId: '202', meta: { title: '关于', keepAlive: true } },
-            { path: '/alpha', name: 'AlphaPage', componentId: '203', meta: { title: '页面 A' } },
-            { path: '/beta', name: 'BetaPage', componentId: '204', meta: { title: '页面 B' } },
-            { path: '/gamma', name: 'GammaPage', componentId: '205', meta: { title: '页面 C', keepAlive: true } },
-            { path: '/lab-redirect', name: 'LabRedirect', redirect: '/gamma', meta: { title: '重定向到 Gamma' } },
-            {
-                path: '/workspace',
-                name: 'Workspace',
-                componentId: '201',
-                redirect: '/workspace/profile',
-                meta: { title: '工作台', icon: 'grid' },
-                children: [
-                    { path: 'profile', name: 'Profile', componentId: '207', meta: { title: '个人中心' } },
-                    { path: 'tasks', name: 'Tasks', componentId: '206', meta: { title: '任务面板 (Delta)' } },
-                    { path: 'reports', name: 'Reports', componentId: '204', meta: { title: '报表' } },
-                    { path: 'entry', name: 'WorkspaceEntry', redirect: '/workspace/tasks', meta: { title: '子路由重定向' } }
-                ]
-            }
-        ]
-    }
-};
-
-const selectedDataset = ref<DatasetKey>('basic');
 const cache = ref<ServerRouteResponse | null>(null);
 const dynamicRoutes = ref<BuiltRoute[]>([]);
 const loading = ref(false);
 const status = ref('');
 const revision = ref(0);
 const localVersion = ref<string | null>(null);
+const remoteVersion = ref<string>('');
 
-const editableRoutes = ref<EditableNode[]>(cloneRoutes(baseDatasets[selectedDataset.value].routes));
+const editableRoutes = ref<EditableNode[]>([]);
+const componentMapping = ref<Record<string, string>>({});
 const componentKeys = Object.keys(viewMap);
-const componentMapping = computed(() => baseDatasets[selectedDataset.value].componentMapping);
 
 const form = reactive({
     name: '',
@@ -95,13 +31,14 @@ const form = reactive({
     componentId: '',
     componentKey: componentKeys[0] ?? '',
     redirect: '',
+    redirectTarget: '',
     title: '',
     keepAlive: false,
     hidden: false
 });
 const selectedPath = ref<string | null>(null);
 
-const currentVersion = computed(() => `${baseDatasets[selectedDataset.value].version}-rev${revision.value}`);
+const currentVersion = computed(() => `${remoteVersion.value || '0.0.0'}-rev${revision.value}`);
 const currentResponse = computed<ServerRouteResponse>(() => ({
     version: currentVersion.value,
     routes: sanitizeRoutes(editableRoutes.value),
@@ -109,86 +46,238 @@ const currentResponse = computed<ServerRouteResponse>(() => ({
 }));
 const previewRoutes = computed(() => editableRoutes.value);
 const cacheVersion = computed(() => cache.value?.version ?? '无');
-
-class MemoryRouteDataSource implements IRouteDataSource {
-    constructor(
-        private getResponse: () => ServerRouteResponse,
-        private cacheBox: { value: ServerRouteResponse | null }
-    ) {}
-
-    async fetch(): Promise<ServerRouteResponse> {
-        await new Promise(resolve => setTimeout(resolve, 160));
-        return JSON.parse(JSON.stringify(this.getResponse()));
-    }
-
-    readCache(): ServerRouteResponse | null {
-        return this.cacheBox.value;
-    }
-
-    writeCache(resp: ServerRouteResponse): void {
-        this.cacheBox.value = resp;
-    }
-
-    isSameVersion(localVersion: string | null, remoteVersion: string): boolean {
-        return !!localVersion && localVersion === remoteVersion;
-    }
-}
-
-const dataSource = new MemoryRouteDataSource(
-    () => currentResponse.value,
-    cache
-);
-const manager = new DynamicRouteManager(dataSource);
-
-watch(selectedDataset, () => {
-    resetEditor();
-    resetCache();
-    clearDynamicRoutes();
-    status.value = '已切换数据集，缓存和动态路由已重置';
+const redirectOptions = computed(() => {
+    const opts: { label: string; path: string; name?: string; id?: string }[] = [];
+    const walk = (nodes: EditableNode[], parentPath = '') => {
+        nodes.forEach(n => {
+            const fullPath = buildFullPath(n.path, parentPath);
+            opts.push({
+                label: `${n.name} (${fullPath}) ${n.componentId ? `id:${n.componentId}` : ''}`,
+                path: fullPath,
+                name: n.name,
+                id: n.componentId
+            });
+            if (n.children?.length) walk(n.children, fullPath);
+        });
+    };
+    walk(editableRoutes.value);
+    return opts;
+});
+const previewLinks = computed(() => {
+    const links: { name?: string; path: string; indent: number }[] = [];
+    const walk = (nodes: EditableNode[], parentPath = '', level = 0) => {
+        nodes.forEach(n => {
+            const fullPath = buildFullPath(n.path, parentPath);
+            links.push({ name: n.name, path: fullPath, indent: level });
+            if (n.children?.length) walk(n.children, fullPath, level + 1);
+        });
+    };
+    walk(editableRoutes.value);
+    return links;
 });
 
-function cloneRoutes(routes: EditableNode[]): EditableNode[] {
-    return JSON.parse(JSON.stringify(routes));
+const componentUsage = computed(() => {
+    const usage: Record<string, { key: string; paths: string[] }> = {};
+    const walk = (nodes: EditableNode[], parent = '') => {
+        nodes.forEach(n => {
+            const fullPath = buildFullPath(n.path, parent);
+            const id = n.componentId ?? '';
+            const key = resolveComponentKey(n);
+            if (!usage[id]) usage[id] = { key, paths: [] };
+            usage[id].paths.push(fullPath);
+            if (n.children?.length) walk(n.children, fullPath);
+        });
+    };
+    walk(editableRoutes.value);
+    return Object.entries(usage).map(([id, v]) => ({ id, key: v.key, paths: v.paths, label: `${id}-${v.key}` }));
+});
+
+const dataSourceCache = {
+    value: null as ServerRouteResponse | null
+};
+
+class MemoryCacheRouteDataSource implements IRouteDataSource {
+    constructor(private base: IRouteDataSource, private store: { value: ServerRouteResponse | null }) {}
+    async fetch(): Promise<ServerRouteResponse> {
+        return this.base.fetch();
+    }
+    readCache(): ServerRouteResponse | null {
+        return this.store.value;
+    }
+    writeCache(resp: ServerRouteResponse): void {
+        this.store.value = resp;
+    }
+    isSameVersion(localVersion: string | null, remoteVersion: string): boolean {
+        return this.base.isSameVersion(localVersion, remoteVersion);
+    }
 }
 
-function sanitizeRoutes(nodes: EditableNode[]): ServerRouteNode[] {
-    return nodes.map(n => ({
-        path: n.path,
-        name: n.name,
-        componentKey: n.componentKey,
-        componentId: n.componentId,
-        redirect: n.redirect,
-        meta: n.meta,
-        props: n.props,
-        hidden: n.hidden,
-        children: n.children ? sanitizeRoutes(n.children) : undefined
-    }));
-}
+const dataSourceWithMemory = new MemoryCacheRouteDataSource(dataSource, dataSourceCache);
+const manager = new DynamicRouteManager(dataSourceWithMemory);
 
-function bumpRevision() {
-    revision.value += 1;
-}
-
-function resetEditor() {
-    editableRoutes.value = cloneRoutes(baseDatasets[selectedDataset.value].routes);
+const setFromResponse = (resp: ServerRouteResponse) => {
+    remoteVersion.value = resp.version;
+    componentMapping.value = resp.componentMapping || {};
+    editableRoutes.value = cloneRoutes(resp.routes as EditableNode[]);
+    revision.value = 0;
     selectedPath.value = null;
     fillForm(null);
-    bumpRevision();
-    localVersion.value = null;
-    form.componentId = '';
-}
+    notifyRoutesUpdated();
+};
 
-function resetCache() {
-    cache.value = null;
-}
+const init = async () => {
+    loading.value = true;
+    status.value = '从后端（模拟）获取路由中...';
+    try {
+        const local = readLocalRouteData();
+        if (local) {
+            setFromResponse(local);
+            localVersion.value = local.version;
+            status.value = `已从本地读取版本 ${local.version}，如需重新拉取后端可点击“重新获取”`;
+        } else {
+            const resp = await dataSource.fetch();
+            setFromResponse(resp);
+            status.value = `已从后端（模拟）获取版本 ${resp.version}`;
+        }
+    } catch (err: any) {
+        status.value = err?.message ?? '初始化失败';
+    } finally {
+        loading.value = false;
+    }
+};
 
-function clearDynamicRoutes() {
+init();
+
+const clearDynamicRoutes = () => {
     manager.getDynamicRoutes().forEach(r => {
         if (r.name && router.hasRoute(r.name)) {
             router.removeRoute(r.name);
         }
     });
     dynamicRoutes.value = [];
+    notifyRoutesUpdated();
+};
+
+const loadRoutes = async (force = false) => {
+    loading.value = true;
+    const versionChanged = cache.value?.version !== currentVersion.value;
+    const shouldForce = force || versionChanged || cache.value === null || !dynamicRoutes.value.length;
+    status.value = shouldForce ? '强制刷新中...' : '加载中...';
+    if (shouldForce) clearDynamicRoutes();
+
+    try {
+        await manager.ensureLoaded({ force: shouldForce });
+        dynamicRoutes.value = manager.getDynamicRoutes();
+        status.value = `已注册 ${dynamicRoutes.value.length} 条动态路由`;
+        notifyRoutesUpdated();
+    } catch (err: any) {
+        status.value = err?.message ?? String(err);
+    } finally {
+        loading.value = false;
+    }
+};
+
+const reFetch = async () => {
+    loading.value = true;
+    status.value = '重新从后端（模拟）获取...';
+    try {
+        const resp = await dataSource.fetch();
+        setFromResponse(resp);
+        clearDynamicRoutes();
+        cache.value = null;
+        localVersion.value = null;
+        status.value = `已刷新为版本 ${resp.version}`;
+        notifyRoutesUpdated();
+    } catch (err: any) {
+        status.value = err?.message ?? '重新获取失败';
+    } finally {
+        loading.value = false;
+    }
+};
+
+const formatMeta = (meta: unknown) => {
+    if (!meta || typeof meta !== 'object') return '无';
+    const entries = Object.entries(meta as Record<string, unknown>);
+    if (!entries.length) return '无';
+    return entries.map(([k, v]) => `${k}: ${String(v)}`).join(' · ');
+};
+
+const buildFullPath = (path: string, parent: string) => {
+    if (path.startsWith('/')) return path;
+    const base = parent.endsWith('/') ? parent.slice(0, -1) : parent;
+    return `${base}/${path}` || '/';
+};
+
+const resolveComponentKey = (node: ServerRouteNode) => {
+    const mapped = node.componentId ? componentMapping.value[node.componentId] : undefined;
+    return mapped ?? node.componentKey ?? '';
+};
+
+function getFullPathForIndex(path: string | null): string {
+    if (!path) return '';
+    const indexes = path.split('-').map(i => Number(i));
+    let list: EditableNode[] = editableRoutes.value;
+    let prefix = '';
+    for (const idx of indexes) {
+        const node = list[idx];
+        if (!node) return '';
+        prefix = buildFullPath(node.path, prefix);
+        list = node.children ?? [];
+    }
+    return prefix;
+}
+
+const componentUsageFromRoute = (node: EditableNode, parent: string, map: Record<string, { key: string; paths: string[] }>) => {
+    const fullPath = buildFullPath(node.path, parent);
+    const id = node.componentId ?? '';
+    const key = resolveComponentKey(node);
+    if (!map[id]) map[id] = { key, paths: [] };
+    map[id].paths.push(fullPath);
+    node.children?.forEach(child => componentUsageFromRoute(child, fullPath, map));
+};
+
+function cloneRoutes(routes: EditableNode[]): EditableNode[] {
+    return JSON.parse(JSON.stringify(routes));
+}
+
+function sanitizeRoutes(nodes: EditableNode[], parent: string = ''): ServerRouteNode[] {
+    return nodes.map(n => {
+        const fullPath = buildFullPath(n.path, parent);
+        const path = parent ? n.path.replace(/^\//, '') : n.path.startsWith('/') ? n.path : `/${n.path}`;
+        let redirect = n.redirect;
+        if (redirect) {
+            const normalizedRedirect = redirect.startsWith('/') ? redirect : buildFullPath(redirect, fullPath);
+            if (normalizedRedirect === fullPath) redirect = undefined; // 避免自指向重定向导致循环
+            else redirect = normalizedRedirect;
+        }
+        return {
+            path,
+            name: n.name,
+            componentKey: n.componentKey,
+            componentId: n.componentId,
+            redirect,
+            meta: n.meta,
+            props: n.props,
+            hidden: n.hidden,
+            children: n.children ? sanitizeRoutes(n.children, fullPath) : undefined
+        };
+    });
+}
+
+function bumpRevision() {
+    revision.value += 1;
+}
+
+function fillForm(node: EditableNode | null) {
+    form.name = node?.name ?? '';
+    form.path = node?.path ?? '';
+    form.componentId = node?.componentId ?? '';
+    form.componentKey = node?.componentKey ?? componentKeys[0] ?? '';
+    form.redirect = node?.redirect ?? '';
+    form.redirectTarget = '';
+    form.title = (node?.meta as any)?.title ?? '';
+    form.keepAlive = Boolean((node?.meta as any)?.keepAlive);
+    form.hidden = Boolean((node?.meta as any)?.hidden);
 }
 
 function getNodeByPath(path: string | null): EditableNode | null {
@@ -202,17 +291,6 @@ function getNodeByPath(path: string | null): EditableNode | null {
         list = node.children ?? [];
     }
     return node ?? null;
-}
-
-function fillForm(node: EditableNode | null) {
-    form.name = node?.name ?? '';
-    form.path = node?.path ?? '';
-    form.componentId = node?.componentId ?? '';
-    form.componentKey = node?.componentKey ?? componentKeys[0] ?? '';
-    form.redirect = node?.redirect ?? '';
-    form.title = (node?.meta as any)?.title ?? '';
-    form.keepAlive = Boolean((node?.meta as any)?.keepAlive);
-    form.hidden = Boolean((node?.meta as any)?.hidden);
 }
 
 function selectNode(path: string) {
@@ -243,9 +321,10 @@ function applyFormToNode() {
     status.value = '已更新当前路由';
 }
 
-function makeNewNode(title: string): EditableNode {
+function makeNewNode(title: string, isRoot = false): EditableNode {
+    const slug = `new-${Math.random().toString(36).slice(2, 6)}`;
     return {
-        path: `/new-${Math.random().toString(36).slice(2, 6)}`,
+        path: isRoot ? `/${slug}` : slug,
         name: `Route${Date.now().toString(16)}`,
         componentKey: componentKeys[0] ?? 'home',
         componentId: '',
@@ -254,7 +333,7 @@ function makeNewNode(title: string): EditableNode {
 }
 
 function addRootRoute() {
-    editableRoutes.value.push(makeNewNode('新建根路由'));
+    editableRoutes.value.push(makeNewNode('新建根路由', true));
     bumpRevision();
     selectedPath.value = String(editableRoutes.value.length - 1);
     fillForm(getNodeByPath(selectedPath.value));
@@ -262,16 +341,27 @@ function addRootRoute() {
 }
 
 function addChildRoute() {
+    addChildRouteWithRedirect(false);
+}
+
+function addChildRouteWithRedirect(setRedirect: boolean) {
     const parent = getNodeByPath(selectedPath.value);
     if (!parent) {
         status.value = '请先选择父节点再添加子路由';
         return;
     }
+    const parentFull = getFullPathForIndex(selectedPath.value);
     parent.children = parent.children || [];
-    parent.children.push(makeNewNode('新建子路由'));
+    const child = makeNewNode('新建子路由');
+    parent.children.push(child);
     bumpRevision();
     selectedPath.value = `${selectedPath.value}-${parent.children.length - 1}`;
     fillForm(getNodeByPath(selectedPath.value));
+    if (setRedirect) {
+        const childFull = buildFullPath(child.path, parentFull);
+        parent.redirect = childFull;
+        form.redirect = childFull;
+    }
     status.value = '已添加子路由';
 }
 
@@ -295,6 +385,16 @@ function deleteSelected() {
     status.value = '已删除所选路由';
 }
 
+function setRedirectToSelected() {
+    const full = getFullPathForIndex(selectedPath.value);
+    if (!full) {
+        status.value = '未选择路由，无法设置重定向';
+        return;
+    }
+    form.redirect = full;
+    status.value = `已将重定向设置为 ${full}`;
+}
+
 function saveLocal() {
     const payload: ServerRouteResponse = {
         version: currentVersion.value,
@@ -302,7 +402,7 @@ function saveLocal() {
         componentMapping: componentMapping.value
     };
     try {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
+        writeLocalRouteData(payload);
         localVersion.value = payload.version;
         status.value = `已保存到本地存储，版本 ${payload.version}`;
     } catch (err: any) {
@@ -312,54 +412,23 @@ function saveLocal() {
 
 function loadLocal() {
     try {
-        const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-        if (!raw) {
+        const parsed = readLocalRouteData();
+        if (!parsed) {
             status.value = '本地存储暂无数据';
             return;
         }
-        const parsed: ServerRouteResponse = JSON.parse(raw);
-        editableRoutes.value = cloneRoutes(parsed.routes as EditableNode[]);
-        selectedPath.value = null;
-        fillForm(null);
-        revision.value = 0;
-        baseDatasets[selectedDataset.value].version = parsed.version || baseDatasets[selectedDataset.value].version;
-        if (parsed.componentMapping) baseDatasets[selectedDataset.value].componentMapping = parsed.componentMapping;
+        setFromResponse(parsed);
         localVersion.value = parsed.version ?? null;
         status.value = `已从本地加载版本 ${parsed.version ?? '未知'}`;
+        notifyRoutesUpdated();
     } catch (err: any) {
         status.value = err?.message ?? '读取本地失败';
     }
 }
 
-const loadRoutes = async (force = false) => {
-    loading.value = true;
-    const versionChanged = cache.value?.version !== currentVersion.value;
-    const shouldForce = force || versionChanged || cache.value === null || !dynamicRoutes.value.length;
-    status.value = shouldForce ? '强制刷新中...' : '加载中...';
-    if (shouldForce) clearDynamicRoutes();
-
-    try {
-        await manager.ensureLoaded({ force: shouldForce });
-        dynamicRoutes.value = manager.getDynamicRoutes();
-        status.value = `已注册 ${dynamicRoutes.value.length} 条动态路由`;
-    } catch (err: any) {
-        status.value = err?.message ?? String(err);
-    } finally {
-        loading.value = false;
-    }
-};
-
-const formatMeta = (meta: unknown) => {
-    if (!meta || typeof meta !== 'object') return '无';
-    const entries = Object.entries(meta as Record<string, unknown>);
-    if (!entries.length) return '无';
-    return entries.map(([k, v]) => `${k}: ${String(v)}`).join(' · ');
-};
-
-const resolveComponentKey = (node: ServerRouteNode) => {
-    const mapped = node.componentId ? componentMapping.value[node.componentId] : undefined;
-    return mapped ?? node.componentKey ?? '未指定';
-};
+function notifyRoutesUpdated() {
+    window.dispatchEvent(new CustomEvent('routes-updated'));
+}
 
 const TreeItem = defineComponent({
     name: 'TreeItem',
@@ -371,14 +440,14 @@ const TreeItem = defineComponent({
     emits: ['select'],
     setup(props, { emit }) {
         const onSelect = () => emit('select', props.path);
-        return () => h('li', { class: { selected: props.selected === props.path } }, [
+        const render = (): VNode => h('li', { class: { selected: props.selected === props.path } }, [
             h('div', { class: 'tree-line', onClick: onSelect }, [
                 h('div', [
                     h('strong', props.node.name),
                     h('span', { class: 'muted' }, `· ${props.node.path}`),
                     props.node.redirect ? h('span', { class: 'pill' }, `redirect → ${props.node.redirect}`) : null,
                     props.node.componentId ? h('span', { class: 'pill ghost-pill' }, `id=${props.node.componentId}`) : null,
-                    h('span', { class: 'pill ghost-pill' }, `comp=${resolveComponentKey(props.node)}`)
+                    resolveComponentKey(props.node) ? h('span', { class: 'pill ghost-pill' }, `comp=${resolveComponentKey(props.node)}`) : null
                 ]),
                 h('div', { class: 'meta' }, `meta: ${formatMeta(props.node.meta)}`)
             ]),
@@ -397,6 +466,7 @@ const TreeItem = defineComponent({
                 )
                 : null
         ]);
+        return render;
     }
 });
 </script>
@@ -407,19 +477,12 @@ const TreeItem = defineComponent({
       <div class="panel__header">
         <div>
           <p class="label">数据源</p>
-          <h2>路由管理测试台（组件映射版）</h2>
+          <h2>路由管理测试台（后端模拟）</h2>
         </div>
         <span class="badge">RouterManager</span>
       </div>
 
       <div class="grid">
-        <div class="field">
-          <p class="label">选择数据集</p>
-          <select v-model="selectedDataset">
-            <option value="basic">基础数据 (v1.0.0)</option>
-            <option value="expanded">扩展数据 (v2.0.0)</option>
-          </select>
-        </div>
         <div class="field">
           <p class="label">当前版本</p>
           <strong>{{ currentVersion }}</strong>
@@ -441,8 +504,8 @@ const TreeItem = defineComponent({
         <button class="primary" @click="loadRoutes(true)" :disabled="loading">
           {{ loading ? '刷新中...' : '强制刷新' }}
         </button>
-        <button class="ghost" @click="resetCache()" :disabled="loading">
-          清空缓存
+        <button class="ghost" @click="reFetch" :disabled="loading">
+          重新获取后端（模拟）
         </button>
         <button class="ghost" @click="saveLocal()" :disabled="loading">
           保存到本地
@@ -458,12 +521,17 @@ const TreeItem = defineComponent({
     <section class="panel">
       <div class="panel__header">
         <h3>组件映射表 (id -> 组件 key)</h3>
-        <span class="hint">后端返回的映射数据，编辑路由时优先填写组件 id</span>
+        <span class="hint">动态反映当前路由树引用的组件</span>
       </div>
       <div class="mapping-grid">
-        <div v-for="(key, id) in componentMapping" :key="id" class="mapping-item">
-          <span class="mapping-id">ID: {{ id }}</span>
-          <span class="mapping-key">组件: {{ key }}</span>
+        <div v-for="item in componentUsage" :key="item.id || item.label" class="mapping-item">
+          <div class="map-row">
+            <span class="mapping-id">ID: {{ item.id || '未设置' }}</span>
+            <span class="mapping-key">组件: {{ item.key || '未指定' }}</span>
+          </div>
+          <div class="map-paths">
+            <span v-for="p in item.paths" :key="p">{{ p }}</span>
+          </div>
         </div>
       </div>
     </section>
@@ -499,6 +567,15 @@ const TreeItem = defineComponent({
             <input v-model="form.redirect" placeholder="例如 /home 或 /workspace/profile" />
           </div>
           <div class="field">
+            <p class="label">重定向目标 (从路由列表选择)</p>
+            <select v-model="form.redirectTarget" @change="form.redirect = form.redirectTarget">
+              <option value="">选择路由以设置 redirect</option>
+              <option v-for="opt in redirectOptions" :key="opt.path + opt.name" :value="opt.path">
+                {{ opt.label }}
+              </option>
+            </select>
+          </div>
+          <div class="field">
             <p class="label">Meta</p>
             <div class="meta-row">
               <input v-model="form.title" placeholder="meta.title" />
@@ -510,6 +587,8 @@ const TreeItem = defineComponent({
             <button class="primary" @click="applyFormToNode">更新所选路由</button>
             <button @click="addRootRoute">新增根路由</button>
             <button @click="addChildRoute">在所选节点下新增子路由</button>
+            <button @click="addChildRouteWithRedirect(true)">新增子路由并重定向到该子路由</button>
+            <button class="ghost" @click="setRedirectToSelected">将重定向指向当前选中路由</button>
             <button class="ghost" @click="deleteSelected">删除所选路由</button>
           </div>
           <p class="hint">当前选中：{{ selectedPath ?? '未选择' }}</p>
@@ -533,30 +612,38 @@ const TreeItem = defineComponent({
     <section class="panel">
       <div class="panel__header">
         <h3>即将加载的路由</h3>
-        <span class="hint">带有重定向的路由可直接点击下方导航测试</span>
+        <span class="hint">带有重定向的路由可直接点击侧边导航测试</span>
       </div>
       <ul class="route-list">
         <li v-for="route in previewRoutes" :key="route.name">
-          <div class="route-line">
-            <div>
-              <strong>{{ route.name }}</strong>
-              <span class="muted">· {{ route.path }}</span>
-              <span v-if="route.redirect" class="pill">redirect → {{ route.redirect }}</span>
-              <span v-if="route.componentId" class="pill ghost-pill">id={{ route.componentId }}</span>
-              <span class="pill ghost-pill">comp={{ resolveComponentKey(route) }}</span>
+          <div class="route-line vertical">
+            <div class="line">
+              <div>
+                <strong>{{ route.name }}</strong>
+                <span class="muted">· {{ route.path }}</span>
+                <span v-if="route.redirect" class="pill">redirect → {{ route.redirect }}</span>
+              </div>
+              <div class="meta-row">
+                <span v-if="route.componentId" class="pill ghost-pill">id={{ route.componentId }}</span>
+                <span v-if="resolveComponentKey(route)" class="pill ghost-pill">comp={{ resolveComponentKey(route) }}</span>
+              </div>
             </div>
             <div class="meta">meta: {{ formatMeta(route.meta) }}</div>
           </div>
 
           <ul v-if="route.children?.length" class="child-list">
             <li v-for="child in route.children" :key="child.name">
-              <div class="route-line">
-                <div>
-                  <strong>{{ child.name }}</strong>
-                  <span class="muted">· /{{ child.path }}</span>
-                  <span v-if="child.redirect" class="pill">redirect → {{ child.redirect }}</span>
-                  <span v-if="child.componentId" class="pill ghost-pill">id={{ child.componentId }}</span>
-                  <span class="pill ghost-pill">comp={{ resolveComponentKey(child) }}</span>
+              <div class="route-line vertical">
+                <div class="line">
+                  <div>
+                    <strong>{{ child.name }}</strong>
+                    <span class="muted">· /{{ child.path }}</span>
+                    <span v-if="child.redirect" class="pill">redirect → {{ child.redirect }}</span>
+                  </div>
+                  <div class="meta-row">
+                    <span v-if="child.componentId" class="pill ghost-pill">id={{ child.componentId }}</span>
+                    <span v-if="resolveComponentKey(child)" class="pill ghost-pill">comp={{ resolveComponentKey(child) }}</span>
+                  </div>
                 </div>
                 <div class="meta">meta: {{ formatMeta(child.meta) }}</div>
               </div>
@@ -581,22 +668,26 @@ const TreeItem = defineComponent({
       </div>
       <ul v-else class="route-list">
         <li v-for="route in dynamicRoutes" :key="route.name || route.path">
-          <div class="route-line">
-            <div>
-              <strong>{{ route.name || '(未命名)' }}</strong>
-              <span class="muted">· {{ route.path }}</span>
-              <span v-if="route.redirect" class="pill">redirect → {{ route.redirect }}</span>
+          <div class="route-line vertical">
+            <div class="line">
+              <div>
+                <strong>{{ route.name || '(未命名)' }}</strong>
+                <span class="muted">· {{ route.path }}</span>
+                <span v-if="route.redirect" class="pill">redirect → {{ route.redirect }}</span>
+              </div>
             </div>
             <div class="meta">meta: {{ formatMeta(route.meta) }}</div>
           </div>
 
           <ul v-if="route.children?.length" class="child-list">
             <li v-for="child in route.children" :key="child.name || child.path">
-              <div class="route-line">
-                <div>
-                  <strong>{{ child.name || '(未命名)' }}</strong>
-                  <span class="muted">· /{{ child.path }}</span>
-                  <span v-if="child.redirect" class="pill">redirect → {{ child.redirect }}</span>
+              <div class="route-line vertical">
+                <div class="line">
+                  <div>
+                    <strong>{{ child.name || '(未命名)' }}</strong>
+                    <span class="muted">· /{{ child.path }}</span>
+                    <span v-if="child.redirect" class="pill">redirect → {{ child.redirect }}</span>
+                  </div>
                 </div>
                 <div class="meta">meta: {{ formatMeta(child.meta) }}</div>
               </div>
@@ -604,25 +695,6 @@ const TreeItem = defineComponent({
           </ul>
         </li>
       </ul>
-    </section>
-
-    <section class="panel">
-      <div class="panel__header">
-        <h3>导航测试</h3>
-        <span class="hint">加载路由后，尝试直接点击含重定向的入口</span>
-      </div>
-      <div class="links">
-        <RouterLink to="/home">/home</RouterLink>
-        <RouterLink to="/about">/about</RouterLink>
-        <RouterLink to="/alpha">/alpha</RouterLink>
-        <RouterLink to="/beta">/beta</RouterLink>
-        <RouterLink to="/gamma">/gamma</RouterLink>
-        <RouterLink to="/legacy-home">/legacy-home</RouterLink>
-        <RouterLink to="/lab-redirect">/lab-redirect</RouterLink>
-        <RouterLink to="/workspace/profile">/workspace/profile</RouterLink>
-        <RouterLink to="/workspace/reports">/workspace/reports</RouterLink>
-        <RouterLink to="/workspace/entry">/workspace/entry</RouterLink>
-      </div>
     </section>
   </div>
 </template>
@@ -741,6 +813,17 @@ button:hover:not(:disabled) {
   border-radius: 10px;
   background: #fdfefe;
 }
+.route-line.vertical {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.line {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 10px;
+}
 
 .child-list {
   list-style: none;
@@ -826,6 +909,7 @@ button:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .editor-actions {
@@ -871,7 +955,7 @@ button:hover:not(:disabled) {
 
 .mapping-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
 }
 
@@ -880,9 +964,16 @@ button:hover:not(:disabled) {
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   background: #f8fafc;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.map-row {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .mapping-id {
@@ -892,6 +983,13 @@ button:hover:not(:disabled) {
 
 .mapping-key {
   color: #374151;
+}
+
+.map-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #4b5563;
 }
 
 @media (max-width: 600px) {
