@@ -8,5 +8,6 @@ export const viewMap: Record<string, () => Promise<Component>> = {
     alpha: () => import("../../views/Alpha.vue"),
     beta: () => import("../../views/Beta.vue"),
     gamma: () => import("../../views/Gamma.vue"),
-    delta: () => import("../../views/Delta.vue")
+    delta: () => import("../../views/Delta.vue"),
+    layout: () => import("../../views/RouteContainer.vue")
 };

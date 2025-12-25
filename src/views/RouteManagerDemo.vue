@@ -3,9 +3,9 @@ import { computed, reactive, ref, watch, defineComponent, h } from 'vue';
 import type { PropType, VNode } from 'vue';
 import { RouterLink } from 'vue-router';
 import { DynamicRouteManager } from '../utils/RouterManager/RouterManager';
-import type { IRouteDataSource } from '../utils/RouterManager/RouterData';
+import type { IRouteDataSource } from '../utils/RouterManager';
 import { MockRouteDataSource, readLocalRouteData, writeLocalRouteData } from '../utils/RouterManager/RouterData';
-import type { BuiltRoute, ServerRouteNode, ServerRouteResponse } from '../utils/RouterManager/types';
+import type { BuiltRoute, ServerRouteNode, ServerRouteResponse } from '../utils/RouterManager';
 import { viewMap } from '../utils/RouterManager/ViewMap';
 import { router } from '../router';
 

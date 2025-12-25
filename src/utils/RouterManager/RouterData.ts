@@ -46,12 +46,24 @@ const mockData: ServerRouteResponse = {
         '1001': 'home',
         '1002': 'about',
         '1003': 'alpha',
-        '1004': 'beta'
+        '1004': 'beta',
+        '1005': 'layout'
     },
     routes: [
         { path: '/home', name: 'Home', componentId: '1001', meta: { title: '首页' } },
         { path: '/about', name: 'About', componentId: '1002', meta: { title: '关于' } },
         { path: '/alpha', name: 'Alpha', componentId: '1003', meta: { title: 'Alpha' } },
+        {
+            path: '/workspace',
+            name: 'Workspace',
+            componentId: '1005',
+            redirect: '/workspace/alpha',
+            meta: { title: '带子路由示例' },
+            children: [
+                { path: 'alpha', name: 'WorkspaceAlpha', componentId: '1003', meta: { title: '子 Alpha' } },
+                { path: 'beta', name: 'WorkspaceBeta', componentId: '1004', meta: { title: '子 Beta' } }
+            ]
+        },
         { path: '/legacy', name: 'Legacy', redirect: '/home', meta: { title: '重定向示例' } }
     ]
 };
