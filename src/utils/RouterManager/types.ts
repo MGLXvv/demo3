@@ -12,6 +12,7 @@ export interface ServerRouteNode {
     path: string;
     name: string;
     componentKey?: string;
+    componentId?: string;
     redirect?: string;
     meta?: AppRouteMeta;
     props?: any;
@@ -20,8 +21,9 @@ export interface ServerRouteNode {
 }
 
 export interface ServerRouteResponse {
-    version: string;             // 时间戳或自增
+    version: string;
     routes: ServerRouteNode[];
+    componentMapping?: Record<string, string>; // id -> componentKey
 }
 
 export type BuiltRoute = RouteRecordRaw & { hidden?: boolean };

@@ -1,20 +1,23 @@
-import type { BuiltRoute, RouteRecord } from './types';
-import type { IComponentResolver } from './componentResolver';
+import type { BuiltRoute, ServerRouteNode } from './types';
+import type { IComponentResolver } from './ComponentResolver';
 
 export class RouteConverter {
     constructor(private resolver: IComponentResolver) {}
 
-    toVueRoutes(nodes: RouteRecord[]): BuiltRoute[] {
-        const walk = (n: RouteRecord): BuiltRoute => {
+    toVueRoutes(nodes: ServerRouteNode[], componentMapping?: Record<string, string>): BuiltRoute[] {
+        const walk = (n: ServerRouteNode): BuiltRoute => {
+            const mappedKey = n.componentId ? componentMapping?.[n.componentId] : undefined;
+            const keyToUse = mappedKey ?? n.componentKey;
             const route: BuiltRoute = {
                 path: n.path,
                 name: n.name,
-                component: this.resolver.resolve(n.componentKey),
-                redirect: n.redirect,
                 meta: n.meta,
                 props: n.props,
                 children: n.children?.map(walk)
             };
+            const resolved = this.resolver.resolve(keyToUse);
+            if (resolved) route.component = resolved;
+            if (n.redirect) route.redirect = n.redirect;
             if (n.hidden ?? n.meta?.hidden) (route as any).hidden = true;
             return route;
         };

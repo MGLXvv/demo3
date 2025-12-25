@@ -1,8 +1,8 @@
-import router from '@/router';
-import type { BuiltRoute, RouteResponse } from './types';
-import type { IRouteDataSource } from './dataSource';
+import {router} from '../../router';
+import type { BuiltRoute, ServerRouteResponse } from './types';
+import type { IRouteDataSource } from './RouterData.ts';
 import { RouteConverter } from './RouterConvert.ts';
-import { MapResolver } from './componentResolver';
+import { MapResolver } from './ComponentResolver.ts';
 
 export interface LoadOptions { force?: boolean; }
 
@@ -27,7 +27,7 @@ export class DynamicRouteManager {
         const useCache = !opts.force && cached && this.dataSource.isSameVersion(cached.version, remote.version);
         const resp: ServerRouteResponse = useCache ? cached! : remote;
 
-        const built = this.converter.toVueRoutes(resp.routes);
+        const built = this.converter.toVueRoutes(resp.routes, resp.componentMapping);
         this.registerRoutes(built);
         if (!useCache) this.dataSource.writeCache(remote);
         this.loaded = true;
